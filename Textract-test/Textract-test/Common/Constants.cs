@@ -13,9 +13,18 @@ namespace Textract_test.Common
             public const string Tables = "TABLES";
         }
 
-        public class KeyValueSetEntityTypes
+        public class KeyValueSet
         {
-            public const string Key = "KEY";
+            public class EntityTypes
+            {
+                public const string Key = "KEY";
+            }
+
+            public class RelationshipTypes
+            {
+                public const string Child = "CHILD";
+                public const string Value = "VALUE";
+            }
         }
     }
 }
