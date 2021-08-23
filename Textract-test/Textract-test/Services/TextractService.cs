@@ -6,19 +6,25 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Textract_test.Common;
+using Textract_test.Models;
 
 namespace Textract_test.Services
 {
     public interface ITextractService
     {
-        Task<AnalyzeDocumentResponse> AnalyzeDocumentAsync(string bucket, string filename);
+        Task<TextractDocument> AnalyzeDocumentAsync(string bucket, string filename);
     }
 
     public class TextractService: ITextractService
     {
-        public async Task<AnalyzeDocumentResponse> AnalyzeDocumentAsync(string bucket, string filename)
+        // TODO: AnalyzeDocumentAsync only handles single-page jpg or pngs.
+        // To analyze multi-page PDFs, use StartDocumentAnalysis to trigger the Textract job
+        // poll the Amazon SQS queue to retrieve the completion status published by Amazon Textract when a text detection request completes.
+        // Obtain the result using GetDocumentAnalysisRequest to get a GetDocumentAnalysisResponse, then execute the below code. 
+        public async Task<TextractDocument> AnalyzeDocumentAsync(string bucket, string filename)
         {
             var featureTypes = new List<string> { Constants.FeatureTypes.Forms, Constants.FeatureTypes.Tables };
+            var textractDoc = new TextractDocument();
             
             // Automatically gets AWS creds from default config/credential files on system
             using (var client = new AmazonTextractClient())
@@ -40,11 +46,15 @@ namespace Textract_test.Services
 
                 // lines and words
                 var lines = results.Blocks
-                    .Select(block => block.BlockType == BlockType.LINE)
+                    .Where(block => block.BlockType == BlockType.LINE)
+                    .Select(block => block.Text)
                     .ToList();
                 var words = results.Blocks
-                    .Select(block => block.BlockType == BlockType.WORD)
+                    .Where(block => block.BlockType == BlockType.WORD)
+                    .Select(block => block.Text)
                     .ToList();
+                textractDoc.Lines = lines;
+                textractDoc.Words = words;
 
                 // Key-value pairs
                 var keyDict = new Dictionary<string, Block>();
@@ -56,12 +66,13 @@ namespace Textract_test.Services
                 PopulateKeyValueDicts(keyDict, valueDict, blockDict, keyValueSets);
 
                 var keyValuePairs = GetKeyValueRelationship(keyDict, valueDict, blockDict);
+                textractDoc.KeyValuePairs = keyValuePairs;
                 
                 // Tables
                 // TODO: Handle tables
             }
 
-            throw new NotImplementedException("Not complete");
+            return textractDoc;
         }
 
         private void PopulateKeyValueDicts(

@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Textract_test.Services;
 
 namespace Textract_test
 {
@@ -32,6 +33,8 @@ namespace Textract_test
             {
                 c.SwaggerDoc("v1", new OpenApiInfo { Title = "Textract_test", Version = "v1" });
             });
+
+            services.AddSingleton<ITextractService, TextractService>();
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.

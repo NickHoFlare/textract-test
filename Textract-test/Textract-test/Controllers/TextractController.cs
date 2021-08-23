@@ -1,7 +1,7 @@
-﻿using Amazon.Textract.Model;
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using System.Threading.Tasks;
+using Textract_test.Models;
 using Textract_test.Services;
 
 namespace Textract_test.Controllers
@@ -20,9 +20,9 @@ namespace Textract_test.Controllers
         }
 
         [HttpGet]
-        public async Task<ActionResult<AnalyzeDocumentResponse>> GetTextractAnalysis([FromQuery]string filename)
+        public async Task<ActionResult<TextractDocument>> GetTextractAnalysis([FromQuery]string filename)
         {
-            return Ok(await _service.AnalyzeDocumentAsync(_config["s3BucketName"], filename));
+            return Ok(await _service.AnalyzeDocumentAsync(_config["AwsSettings:s3BucketName"], filename));
         }
     }
 }
