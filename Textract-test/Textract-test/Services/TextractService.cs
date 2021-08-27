@@ -24,6 +24,7 @@ namespace Textract_test.Services
         private Dictionary<string, Block> _keyDict;
         private Dictionary<string, Block> _valueDict;
         private Dictionary<string, Block> _blockDict;
+        private Dictionary<string, string> _keyValuePairs;
 
         public TextractService(IOptions<AwsSettingsOptions> awsSettings, ISqsService sqsService)
         {
@@ -32,8 +33,9 @@ namespace Textract_test.Services
             _keyDict = new Dictionary<string, Block>();
             _valueDict = new Dictionary<string, Block>();
             _blockDict = new Dictionary<string, Block>();
+            _keyValuePairs = new Dictionary<string, string>();
         }
-        
+
         // AnalyzeDocumentAsync only handles single-page jpg or pngs.
         // To analyze multi-page PDFs, use StartDocumentAnalysis to trigger the Textract job
         // poll the Amazon SQS queue to retrieve the completion status published by Amazon Textract when a text detection request completes.
@@ -47,13 +49,17 @@ namespace Textract_test.Services
             {
                 var done = false;
                 string paginationToken = null;
+                var currentPage = 1;
+
+                var lines = new List<string>();
+                var words = new List<string>();
 
                 // Trigger a Textract Document Analysis job, completion status gets published to SQS.
-                var startAnalysisRequest = BuildStartDocumentAnalysisRequest(bucket, filename);
-                var textractJob = await client.StartDocumentAnalysisAsync(startAnalysisRequest);
+                // var startAnalysisRequest = BuildStartDocumentAnalysisRequest(bucket, filename);
+                // var textractJob = await client.StartDocumentAnalysisAsync(startAnalysisRequest);
 
                 // Wait for Textract to finish processing - poll SQS for success status
-                var completedJobId = await _sqsService.ProcessTextractJob(textractJob.JobId);
+                var completedJobId = "7cea9d0ee4f5927dcc3111c0f032c62da8437d734bdaa3766573e2f0c2d0ceb5"; //await _sqsService.ProcessTextractJob(textractJob.JobId);
 
                 // Get Textract analysis after job completed
                 while (!done)
@@ -66,19 +72,22 @@ namespace Textract_test.Services
                     var completedAnalysis = await client.GetDocumentAnalysisAsync(getAnalysisRequest);
 
                     // lines and words
-                    var lines = GetDocumentLinesOrWords(completedAnalysis, BlockType.LINE);
-                    var words = GetDocumentLinesOrWords(completedAnalysis, BlockType.WORD);
-                    textractDoc.Lines = lines;
-                    textractDoc.Words = words;
+                    lines.AddRange(GetDocumentLinesOrWords(completedAnalysis, BlockType.LINE));
+                    words.AddRange(GetDocumentLinesOrWords(completedAnalysis, BlockType.WORD));
 
                     // Key-value pairs
-                    var keyValuePairs = GetKeyValuePairs(completedAnalysis);
-                    textractDoc.KeyValuePairs = keyValuePairs;
+                    GetKeyValuePairs(completedAnalysis, currentPage);
 
                     // Get next page
                     paginationToken = completedAnalysis.NextToken;
+                    currentPage++;
+
                     done = paginationToken == null ? true : false;
                 }
+
+                textractDoc.Lines = lines;
+                textractDoc.Words = words;
+                textractDoc.KeyValuePairs = _keyValuePairs;
 
                 // Tables
                 // TODO: Handle tables
@@ -120,15 +129,11 @@ namespace Textract_test.Services
                 .ToList();
         }
 
-        private Dictionary<string,string> GetKeyValuePairs(
-            GetDocumentAnalysisResponse analysis)
+        private void GetKeyValuePairs(GetDocumentAnalysisResponse analysis, int currentPage)
         {
-
             PopulateKeyValueDicts(analysis.Blocks);
 
-            var keyValuePairs = GetKeyValueRelationship();
-
-            return keyValuePairs;
+            GetKeyValueRelationship(currentPage);
         }
 
         private void PopulateKeyValueDicts(IEnumerable<Block> blocks)
@@ -151,25 +156,21 @@ namespace Textract_test.Services
             }
         }
 
-        private Dictionary<string,string> GetKeyValueRelationship()
+        private void GetKeyValueRelationship(int currentPage)
         {
-            var keyValuePairs = new Dictionary<string, string>();
-
             foreach (var key in _keyDict.Keys)
             {
                 var keyBlock = _keyDict[key];
                 var valueBlock = GetValueBlock(keyBlock);
 
-                var keyText = GetKeyValueText(keyBlock);
+                var keyText = $"page{currentPage}-{GetKeyValueText(keyBlock)}";
                 var valueText = GetKeyValueText(valueBlock);
 
                 if (keyText != null)
                 {
-                    keyValuePairs[keyText] = valueText;
+                    _keyValuePairs[keyText] = valueText;
                 }
             }
-
-            return keyValuePairs;
         }
 
         private Block GetValueBlock(Block keyBlock)
