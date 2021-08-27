@@ -2,6 +2,7 @@
 using Amazon.Textract;
 using Amazon.Textract.Model;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -13,57 +14,72 @@ namespace Textract_test.Services
 {
     public interface ITextractService
     {
-        Task<TextractDocument> AnalyzeDocumentAsync(string bucket, string filename);
+        Task<TextractDocument> AnalyzeDocument(string bucket, string filename);
     }
 
     public class TextractService: ITextractService
     {
-        private readonly IConfiguration _config;
+        private readonly AwsSettingsOptions _awsSettings;
         private readonly ISqsService _sqsService;
+        private Dictionary<string, Block> _keyDict;
+        private Dictionary<string, Block> _valueDict;
+        private Dictionary<string, Block> _blockDict;
 
-        public TextractService(IConfiguration config, ISqsService sqsService)
+        public TextractService(IOptions<AwsSettingsOptions> awsSettings, ISqsService sqsService)
         {
-            _config = config;
+            _awsSettings = awsSettings.Value;
             _sqsService = sqsService;
+            _keyDict = new Dictionary<string, Block>();
+            _valueDict = new Dictionary<string, Block>();
+            _blockDict = new Dictionary<string, Block>();
         }
         
-        // TODO: AnalyzeDocumentAsync only handles single-page jpg or pngs.
+        // AnalyzeDocumentAsync only handles single-page jpg or pngs.
         // To analyze multi-page PDFs, use StartDocumentAnalysis to trigger the Textract job
         // poll the Amazon SQS queue to retrieve the completion status published by Amazon Textract when a text detection request completes.
         // Obtain the result using GetDocumentAnalysisRequest to get a GetDocumentAnalysisResponse, then execute the below code. 
-        public async Task<TextractDocument> AnalyzeDocumentAsync(string bucket, string filename)
+        public async Task<TextractDocument> AnalyzeDocument(string bucket, string filename)
         {
-            var featureTypes = new List<string> { Constants.FeatureTypes.Forms, Constants.FeatureTypes.Tables };
             var textractDoc = new TextractDocument();
             
             // Automatically gets AWS creds from default config/credential files on system
             using (var client = new AmazonTextractClient())
             {
+                var done = false;
+                string paginationToken = null;
+
                 // Trigger a Textract Document Analysis job, completion status gets published to SQS.
                 var startAnalysisRequest = BuildStartDocumentAnalysisRequest(bucket, filename);
                 var textractJob = await client.StartDocumentAnalysisAsync(startAnalysisRequest);
 
                 // Wait for Textract to finish processing - poll SQS for success status
-                // TODO
-                var completedJobId = await _sqsService.ProcessTextractJob();
+                var completedJobId = await _sqsService.ProcessTextractJob(textractJob.JobId);
 
                 // Get Textract analysis after job completed
-                var getAnalysisRequest = new GetDocumentAnalysisRequest
+                while (!done)
                 {
-                    JobId = completedJobId
-                };
-                var completedAnalysis = await client.GetDocumentAnalysisAsync(getAnalysisRequest);
+                    var getAnalysisRequest = new GetDocumentAnalysisRequest
+                    {
+                        JobId = completedJobId,
+                        NextToken = paginationToken
+                    };
+                    var completedAnalysis = await client.GetDocumentAnalysisAsync(getAnalysisRequest);
 
-                // lines and words
-                var lines = GetDocumentLinesOrWords(completedAnalysis, BlockType.LINE);
-                var words = GetDocumentLinesOrWords(completedAnalysis, BlockType.WORD);
-                textractDoc.Lines = lines;
-                textractDoc.Words = words;
+                    // lines and words
+                    var lines = GetDocumentLinesOrWords(completedAnalysis, BlockType.LINE);
+                    var words = GetDocumentLinesOrWords(completedAnalysis, BlockType.WORD);
+                    textractDoc.Lines = lines;
+                    textractDoc.Words = words;
 
-                // Key-value pairs
-                var keyValuePairs = GetKeyValuePairs(completedAnalysis);
-                textractDoc.KeyValuePairs = keyValuePairs;
-                
+                    // Key-value pairs
+                    var keyValuePairs = GetKeyValuePairs(completedAnalysis);
+                    textractDoc.KeyValuePairs = keyValuePairs;
+
+                    // Get next page
+                    paginationToken = completedAnalysis.NextToken;
+                    done = paginationToken == null ? true : false;
+                }
+
                 // Tables
                 // TODO: Handle tables
             }
@@ -84,12 +100,13 @@ namespace Textract_test.Services
                         Name = filename
                     }
                 },
-                // https://docs.aws.amazon.com/textract/latest/dg/api-async-roles.html
-                NotificationChannel = new NotificationChannel
+                FeatureTypes = new List<string> { Constants.FeatureTypes.Forms, Constants.FeatureTypes.Tables },
+            // https://docs.aws.amazon.com/textract/latest/dg/api-async-roles.html
+            NotificationChannel = new NotificationChannel
                 {
-                    RoleArn = _config["textractIamRoleArn"],
-                    SNSTopicArn = _config["snsArn"]
-                },
+                    RoleArn = _awsSettings.TextractIamRoleArn,
+                    SNSTopicArn = _awsSettings.SnsArn
+            },
                 JobTag = "BankStatement", // JobTags help identify the job/groups of jobs
 
             };
@@ -103,82 +120,93 @@ namespace Textract_test.Services
                 .ToList();
         }
 
-        private Dictionary<string,string> GetKeyValuePairs(GetDocumentAnalysisResponse analysis)
+        private Dictionary<string,string> GetKeyValuePairs(
+            GetDocumentAnalysisResponse analysis)
         {
-            var keyDict = new Dictionary<string, Block>();
-            var valueDict = new Dictionary<string, Block>();
-            var blockDict = new Dictionary<string, Block>();
-            var keyValueSets = analysis.Blocks
-                .Where(block => block.BlockType == BlockType.KEY_VALUE_SET);
 
-            PopulateKeyValueDicts(keyDict, valueDict, blockDict, keyValueSets);
+            PopulateKeyValueDicts(analysis.Blocks);
 
-            var keyValuePairs = GetKeyValueRelationship(keyDict, valueDict, blockDict);
+            var keyValuePairs = GetKeyValueRelationship();
 
             return keyValuePairs;
         }
 
-        private void PopulateKeyValueDicts(
-            Dictionary<string, Block> keyDict, Dictionary<string, Block> valueDict, Dictionary<string, Block> blockDict, IEnumerable<Block> keyValueSets)
+        private void PopulateKeyValueDicts(IEnumerable<Block> blocks)
         {
-            foreach (var keyValueSet in keyValueSets)
+            foreach (var block in blocks)
             {
-                blockDict.Add(keyValueSet.Id, keyValueSet);
+                _blockDict.Add(block.Id, block);
 
-                if (keyValueSet.EntityTypes.Contains(Constants.KeyValueSet.EntityTypes.Key))
+                if (block.BlockType == Constants.KeyValueSet.BlockTypes.KeyValueSet)
                 {
-                    keyDict.Add(keyValueSet.Id, keyValueSet);
-                }
-                else
-                {
-                    valueDict.Add(keyValueSet.Id, keyValueSet);
+                    if (block.EntityTypes.Contains(Constants.KeyValueSet.EntityTypes.Key))
+                    {
+                        _keyDict.Add(block.Id, block);
+                    }
+                    else
+                    {
+                        _valueDict.Add(block.Id, block);
+                    }
                 }
             }
         }
 
-        private Dictionary<string,string> GetKeyValueRelationship(
-            Dictionary<string, Block> keyDict, Dictionary<string, Block> valueDict, Dictionary<string, Block> blockDict)
+        private Dictionary<string,string> GetKeyValueRelationship()
         {
             var keyValuePairs = new Dictionary<string, string>();
 
-            foreach (var key in keyDict.Keys)
+            foreach (var key in _keyDict.Keys)
             {
-                var keyBlock = keyDict[key];
-                var keyText = GetKeyValueText(keyBlock, blockDict);
+                var keyBlock = _keyDict[key];
+                var valueBlock = GetValueBlock(keyBlock);
 
-                var valueBlock = GetValueBlock(keyBlock, valueDict);
-                var valueText = GetKeyValueText(valueBlock, blockDict);
+                var keyText = GetKeyValueText(keyBlock);
+                var valueText = GetKeyValueText(valueBlock);
 
-                keyValuePairs[keyText] = valueText;
+                if (keyText != null)
+                {
+                    keyValuePairs[keyText] = valueText;
+                }
             }
 
             return keyValuePairs;
         }
 
-        private string GetKeyValueText(Block keyValueBlock, Dictionary<string, Block> blockDict)
-        {
-            var keyValueTextBlockIds = keyValueBlock.Relationships
-                .Where(rel => rel.Type == Constants.KeyValueSet.RelationshipTypes.Child)
-                .FirstOrDefault().Ids;
-
-            string keyValueText = null;
-            foreach (var keyValueTextTokenBlockId in keyValueTextBlockIds)
-            {
-                var keyValueTextTokenBlock = blockDict[keyValueTextTokenBlockId];
-                var keyValueTextToken = keyValueTextTokenBlock.Text;
-                keyValueText += $"{keyValueTextToken} ";
-            }
-
-            return keyValueText.TrimEnd();
-        }
-
-        private Block GetValueBlock(Block keyBlock, Dictionary<string, Block> valueDict)
+        private Block GetValueBlock(Block keyBlock)
         {
             var valueBlockId = keyBlock.Relationships
                 .Where(rel => rel.Type == Constants.KeyValueSet.RelationshipTypes.Value)
                 .FirstOrDefault().Ids.FirstOrDefault();
 
-            return valueDict[valueBlockId];
+            return _valueDict[valueBlockId];
+        }
+
+        private string GetKeyValueText(Block keyValueBlock)
+        {
+            string keyValueText = null;
+            foreach (var relationship in keyValueBlock.Relationships)
+            {
+                if (relationship.Type == Constants.KeyValueSet.RelationshipTypes.Child)
+                {
+                    foreach (var id in relationship.Ids)
+                    {
+                        var word = _blockDict[id];
+                        if (word.BlockType == Constants.KeyValueSet.BlockTypes.Word)
+                        {
+                            keyValueText += word.Text;
+                        }
+                        else if (word.BlockType == Constants.KeyValueSet.BlockTypes.SelectionElement)
+                        {
+                            if (word.SelectionStatus == Constants.KeyValueSet.BlockTypes.SelectionStatus)
+                            {
+                                keyValueText += "X ";
+                            }
+                        }
+                    }
+                }
+            }
+
+            return keyValueText;
         }
     }
 }

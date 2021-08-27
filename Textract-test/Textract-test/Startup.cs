@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Textract_test.Models;
 using Textract_test.Services;
 
 namespace Textract_test
@@ -27,6 +28,7 @@ namespace Textract_test
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
+            services.Configure<AwsSettingsOptions>(Configuration.GetSection(AwsSettingsOptions.AwsSettings));
 
             services.AddControllers();
             services.AddSwaggerGen(c =>
@@ -34,7 +36,8 @@ namespace Textract_test
                 c.SwaggerDoc("v1", new OpenApiInfo { Title = "Textract_test", Version = "v1" });
             });
 
-            services.AddSingleton<ITextractService, TextractService>();
+            services.AddScoped<ITextractService, TextractService>();
+            services.AddScoped<ISqsService, SqsService>();
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.

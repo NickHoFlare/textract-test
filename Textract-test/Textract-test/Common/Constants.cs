@@ -25,6 +25,17 @@ namespace Textract_test.Common
                 public const string Child = "CHILD";
                 public const string Value = "VALUE";
             }
+
+            public class BlockTypes
+            {
+                public const string KeyValueSet = "KEY_VALUE_SET";
+                public const string Word = "WORD";
+                public const string SelectionElement = "SELECTION_ELEMENT";
+                public const string SelectionStatus = "SELECTED";
+            }
+
         }
+
+        public const string TextractJobSuccess = "SUCCEEDED";
     }
 }
