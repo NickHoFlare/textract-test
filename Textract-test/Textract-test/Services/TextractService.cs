@@ -49,17 +49,16 @@ namespace Textract_test.Services
             {
                 var done = false;
                 string paginationToken = null;
-                var currentPage = 1;
 
                 var lines = new List<string>();
                 var words = new List<string>();
 
                 // Trigger a Textract Document Analysis job, completion status gets published to SQS.
-                // var startAnalysisRequest = BuildStartDocumentAnalysisRequest(bucket, filename);
-                // var textractJob = await client.StartDocumentAnalysisAsync(startAnalysisRequest);
+                var startAnalysisRequest = BuildStartDocumentAnalysisRequest(bucket, filename);
+                var textractJob = await client.StartDocumentAnalysisAsync(startAnalysisRequest);
 
                 // Wait for Textract to finish processing - poll SQS for success status
-                var completedJobId = "7cea9d0ee4f5927dcc3111c0f032c62da8437d734bdaa3766573e2f0c2d0ceb5"; //await _sqsService.ProcessTextractJob(textractJob.JobId);
+                var completedJobId = await _sqsService.ProcessTextractJob(textractJob.JobId);
 
                 // Get Textract analysis after job completed
                 while (!done)
@@ -76,11 +75,10 @@ namespace Textract_test.Services
                     words.AddRange(GetDocumentLinesOrWords(completedAnalysis, BlockType.WORD));
 
                     // Key-value pairs
-                    GetKeyValuePairs(completedAnalysis, currentPage);
+                    GetKeyValuePairs(completedAnalysis);
 
                     // Get next page
                     paginationToken = completedAnalysis.NextToken;
-                    currentPage++;
 
                     done = paginationToken == null ? true : false;
                 }
@@ -129,11 +127,11 @@ namespace Textract_test.Services
                 .ToList();
         }
 
-        private void GetKeyValuePairs(GetDocumentAnalysisResponse analysis, int currentPage)
+        private void GetKeyValuePairs(GetDocumentAnalysisResponse analysis)
         {
             PopulateKeyValueDicts(analysis.Blocks);
 
-            GetKeyValueRelationship(currentPage);
+            GetKeyValueRelationship();
         }
 
         private void PopulateKeyValueDicts(IEnumerable<Block> blocks)
@@ -156,14 +154,14 @@ namespace Textract_test.Services
             }
         }
 
-        private void GetKeyValueRelationship(int currentPage)
+        private void GetKeyValueRelationship()
         {
             foreach (var key in _keyDict.Keys)
             {
                 var keyBlock = _keyDict[key];
                 var valueBlock = GetValueBlock(keyBlock);
 
-                var keyText = $"page{currentPage}-{GetKeyValueText(keyBlock)}";
+                var keyText = $"page{keyBlock.Page}-{GetKeyValueText(keyBlock)}";
                 var valueText = GetKeyValueText(valueBlock);
 
                 if (keyText != null)
