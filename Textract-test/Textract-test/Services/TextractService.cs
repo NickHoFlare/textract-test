@@ -25,6 +25,8 @@ namespace Textract_test.Services
         private Dictionary<string, Block> _valueDict;
         private Dictionary<string, Block> _blockDict;
         private Dictionary<string, string> _keyValuePairs;
+        private List<Block> _tableBlockList;
+        private List<Dictionary<string, List<string>>> _tableList;
 
         public TextractService(IOptions<AwsSettingsOptions> awsSettings, ISqsService sqsService)
         {
@@ -34,6 +36,8 @@ namespace Textract_test.Services
             _valueDict = new Dictionary<string, Block>();
             _blockDict = new Dictionary<string, Block>();
             _keyValuePairs = new Dictionary<string, string>();
+            _tableBlockList = new List<Block>();
+            _tableList = new List<Dictionary<string, List<string>>>();
         }
 
         // AnalyzeDocumentAsync only handles single-page jpg or pngs.
@@ -54,11 +58,11 @@ namespace Textract_test.Services
                 var words = new List<string>();
 
                 // Trigger a Textract Document Analysis job, completion status gets published to SQS.
-                var startAnalysisRequest = BuildStartDocumentAnalysisRequest(bucket, filename);
-                var textractJob = await client.StartDocumentAnalysisAsync(startAnalysisRequest);
+                // var startAnalysisRequest = BuildStartDocumentAnalysisRequest(bucket, filename);
+                // var textractJob = await client.StartDocumentAnalysisAsync(startAnalysisRequest);
 
                 // Wait for Textract to finish processing - poll SQS for success status
-                var completedJobId = await _sqsService.ProcessTextractJob(textractJob.JobId);
+                var completedJobId = "7cea9d0ee4f5927dcc3111c0f032c62da8437d734bdaa3766573e2f0c2d0ceb5"; //await _sqsService.ProcessTextractJob(textractJob.JobId);
 
                 // Get Textract analysis after job completed
                 while (!done)
@@ -74,8 +78,14 @@ namespace Textract_test.Services
                     lines.AddRange(GetDocumentLinesOrWords(completedAnalysis, BlockType.LINE));
                     words.AddRange(GetDocumentLinesOrWords(completedAnalysis, BlockType.WORD));
 
+                    // Digest Blocks
+                    DigestBlocks(completedAnalysis.Blocks);
+
                     // Key-value pairs
-                    GetKeyValuePairs(completedAnalysis);
+                    GetKeyValueRelationship();
+
+                    // Tables
+                    GetTables();
 
                     // Get next page
                     paginationToken = completedAnalysis.NextToken;
@@ -86,9 +96,7 @@ namespace Textract_test.Services
                 textractDoc.Lines = lines;
                 textractDoc.Words = words;
                 textractDoc.KeyValuePairs = _keyValuePairs;
-
-                // Tables
-                // TODO: Handle tables
+                textractDoc.Tables = _tableList;
             }
 
             return textractDoc;
@@ -127,14 +135,7 @@ namespace Textract_test.Services
                 .ToList();
         }
 
-        private void GetKeyValuePairs(GetDocumentAnalysisResponse analysis)
-        {
-            PopulateKeyValueDicts(analysis.Blocks);
-
-            GetKeyValueRelationship();
-        }
-
-        private void PopulateKeyValueDicts(IEnumerable<Block> blocks)
+        private void DigestBlocks(IEnumerable<Block> blocks)
         {
             foreach (var block in blocks)
             {
@@ -150,6 +151,10 @@ namespace Textract_test.Services
                     {
                         _valueDict.Add(block.Id, block);
                     }
+                } 
+                else if (block.BlockType == Constants.KeyValueSet.BlockTypes.Table)
+                {
+                    _tableBlockList.Add(block);
                 }
             }
         }
@@ -206,6 +211,95 @@ namespace Textract_test.Services
             }
 
             return keyValueText;
+        }
+
+        private void GetTables()
+        { 
+            foreach (var tableBlock in _tableBlockList)
+            {
+                var cellIds = tableBlock.Relationships.FirstOrDefault().Ids;
+                // After this runs, we have a matrix of Blocks that are in order and representative of the table rows and columns
+                var cellBlocks = InitializeTable(cellIds);
+                var tableDict = GetTableFromBlocks(cellBlocks);
+                _tableList.Add(tableDict);
+            }
+        }
+
+        // This feels really space inefficient
+        private List<List<Block>> InitializeTable(List<string> cellIds)
+        {
+            // cellBlocks keeps track of where each cell belongs to in the table, in a 2D list.
+            var cellBlocks = new List<List<Block>>();
+
+            foreach (var id in cellIds)
+            {
+                var cellBlock = _blockDict[id];
+                List<Block> columnList = null;
+                // Find the column that the cell belongs to, and slot it there, so that the columns are in order.
+                try
+                {
+                    columnList = cellBlocks[cellBlock.ColumnIndex - 1];
+                }
+                catch(ArgumentOutOfRangeException ex)
+                {
+                    columnList = new List<Block>();
+                }
+
+                if (columnList == null)
+                {
+                    columnList = new List<Block>();
+                }
+                columnList.Add(cellBlock);
+            }
+
+            // Now that we have slotted all cells in their correct columns, we have to sort them by row.
+            for (var i = 0; i < cellBlocks.Count; i++)
+            {
+                var column = cellBlocks[i];
+                cellBlocks[i] = column.OrderBy(cell => cell.RowIndex).ToList();
+            }
+
+            return cellBlocks;
+        }
+
+        private Dictionary<string, List<string>> GetTableFromBlocks(List<List<Block>> cellBlocks)
+        {
+            var table = new Dictionary<string, List<string>>();
+
+            foreach (var column in cellBlocks)
+            {
+                string header = null;
+                for (var i = 0; i < column.Count; i++)
+                {
+                    var cell = column[i];
+                    var cellText = GetCellText(cell);
+                    if (i == 0)
+                    {
+                        header = cellText;
+                        table.Add(header, new List<string>());
+                    } 
+                    else
+                    {
+                        table[header].Add(cellText);
+                    }
+                }
+            }
+
+            return table;
+        }
+
+        private string GetCellText(Block cell)
+        {
+            var wordIds = cell.Relationships.FirstOrDefault().Ids;
+            string cellText = null;
+
+            foreach (var id in wordIds)
+            {
+                var word = _blockDict[id].Text;
+                cellText += $"{word} ";
+            }
+
+            return cellText;
         }
     }
 }

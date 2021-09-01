@@ -32,6 +32,8 @@ namespace Textract_test.Common
                 public const string Word = "WORD";
                 public const string SelectionElement = "SELECTION_ELEMENT";
                 public const string SelectionStatus = "SELECTED";
+                public const string Table = "TABLE";
+                public const string Cell = "CELL";
             }
 
         }

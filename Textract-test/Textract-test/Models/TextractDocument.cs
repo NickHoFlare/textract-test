@@ -7,5 +7,6 @@ namespace Textract_test.Models
         public List<string> Lines { get; set; }
         public List<string> Words { get; set; }
         public Dictionary<string, string> KeyValuePairs { get; set; }
+        public List<Dictionary<string, List<string>>> Tables { get; set; }
     }
 }
