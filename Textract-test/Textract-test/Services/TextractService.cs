@@ -58,11 +58,11 @@ namespace Textract_test.Services
                 var words = new List<string>();
 
                 // Trigger a Textract Document Analysis job, completion status gets published to SQS.
-                // var startAnalysisRequest = BuildStartDocumentAnalysisRequest(bucket, filename);
-                // var textractJob = await client.StartDocumentAnalysisAsync(startAnalysisRequest);
+                //var startAnalysisRequest = BuildStartDocumentAnalysisRequest(bucket, filename);
+                //var textractJob = await client.StartDocumentAnalysisAsync(startAnalysisRequest);
 
                 // Wait for Textract to finish processing - poll SQS for success status
-                var completedJobId = "7cea9d0ee4f5927dcc3111c0f032c62da8437d734bdaa3766573e2f0c2d0ceb5"; //await _sqsService.ProcessTextractJob(textractJob.JobId);
+                var completedJobId = "c1c1774ebaacd42549b176609544678539addba46e69735a503935018538c9df"; // await _sqsService.ProcessTextractJob(textractJob.JobId);
 
                 // Get Textract analysis after job completed
                 while (!done)
@@ -229,26 +229,24 @@ namespace Textract_test.Services
         private List<List<Block>> InitializeTable(List<string> cellIds)
         {
             // cellBlocks keeps track of where each cell belongs to in the table, in a 2D list.
-            var cellBlocks = new List<List<Block>>();
+            var cellBlocks = new Dictionary<int, List<Block>>();
 
             foreach (var id in cellIds)
             {
-                var cellBlock = _blockDict[id];
                 List<Block> columnList = null;
+                var cellBlock = _blockDict[id];
+
                 // Find the column that the cell belongs to, and slot it there, so that the columns are in order.
-                try
+                if (cellBlocks.TryGetValue(cellBlock.ColumnIndex - 1, out var value))
                 {
                     columnList = cellBlocks[cellBlock.ColumnIndex - 1];
                 }
-                catch(ArgumentOutOfRangeException ex)
+                else
                 {
                     columnList = new List<Block>();
+                    cellBlocks[cellBlock.ColumnIndex - 1] = columnList;
                 }
 
-                if (columnList == null)
-                {
-                    columnList = new List<Block>();
-                }
                 columnList.Add(cellBlock);
             }
 
@@ -259,7 +257,8 @@ namespace Textract_test.Services
                 cellBlocks[i] = column.OrderBy(cell => cell.RowIndex).ToList();
             }
 
-            return cellBlocks;
+            var list = cellBlocks.Values.ToList();
+            return list;
         }
 
         private Dictionary<string, List<string>> GetTableFromBlocks(List<List<Block>> cellBlocks)
@@ -275,7 +274,7 @@ namespace Textract_test.Services
                     var cellText = GetCellText(cell);
                     if (i == 0)
                     {
-                        header = cellText;
+                        header = cellText ?? "?Empty?";
                         table.Add(header, new List<string>());
                     } 
                     else
@@ -290,13 +289,16 @@ namespace Textract_test.Services
 
         private string GetCellText(Block cell)
         {
-            var wordIds = cell.Relationships.FirstOrDefault().Ids;
+            var wordIds = cell.Relationships?.FirstOrDefault()?.Ids;
             string cellText = null;
-
-            foreach (var id in wordIds)
+            
+            if (wordIds != null)
             {
-                var word = _blockDict[id].Text;
-                cellText += $"{word} ";
+                foreach (var id in wordIds)
+                {
+                    var word = _blockDict[id].Text;
+                    cellText += $"{word} ";
+                }
             }
 
             return cellText;
